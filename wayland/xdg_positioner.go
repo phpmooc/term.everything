@@ -125,12 +125,12 @@ func (x *XdgPositioner) XdgPositioner_set_parent_configure(
 	x.state.ParentConfigureSerial = serial
 }
 
-func (x *XdgPositioner) XdgPositioner_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.XdgPositioner],
+func (x *XdgPositioner) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.XdgPositioner],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 }
 

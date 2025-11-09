@@ -92,12 +92,12 @@ func (p *WlPointer) WlPointer_release(
 	return true
 }
 
-func (p *WlPointer) WlPointer_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlPointer],
+func (p *WlPointer) OnBind(
+	s protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.WlPointer],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 	// No-op for now
 }

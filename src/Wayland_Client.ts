@@ -51,22 +51,22 @@ export class Wayland_Client implements File_Descriptor_Claim, Sender {
     return this.get_object(surface_id)?.delegate;
   };
 
-  get_role_data_from_role = <T extends Surface_Role["type"]>(
-    role_object_id: Object_ID,
-    role: T
-  ): Extract<Surface_Role, { type: T }>["data"] | null => {
-    const surface = this.get_surface_from_role(role_object_id);
-    if (!surface) {
-      return null;
-    }
-    if (!surface.role) {
-      return null;
-    }
-    if (surface.role.type !== role) {
-      return null;
-    }
-    return surface.role.data as any;
-  };
+  // get_role_data_from_role = <T extends Surface_Role["type"]>(
+  //   role_object_id: Object_ID,
+  //   role: T
+  // ): Extract<Surface_Role, { type: T }>["data"] | null => {
+  //   const surface = this.get_surface_from_role(role_object_id);
+  //   if (!surface) {
+  //     return null;
+  //   }
+  //   if (!surface.role) {
+  //     return null;
+  //   }
+  //   if (surface.role.type !== role) {
+  //     return null;
+  //   }
+  //   return surface.role.data as any;
+  // };
 
   register_role_to_surface = (
     role_id: Role_or_xdg_surface_Object_ID,

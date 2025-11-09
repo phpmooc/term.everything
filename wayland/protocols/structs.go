@@ -4,7 +4,11 @@ type ObjectID[T any] uint32
 
 type AnyObjectID = ObjectID[any]
 
-type WaylandObject[T any] interface {
+type OnBindable interface {
+	OnBind(s ClientState, name AnyObjectID, interface_ string, new_id AnyObjectID, version_number uint32)
+}
+
+type WaylandObject[T OnBindable] interface {
 	Delegate() T
 	OnRequest(s FileDescriptorClaimClientState, message DecodeState)
 }
@@ -27,11 +31,12 @@ type ClientState interface {
 	TopLevelSurfaces() map[ObjectID[XdgToplevel]]bool
 	AddFrameDrawRequest(ObjectID[WlCallback])
 
-	GetSurfaceIDFromRole(AnyObjectID) *AnyObjectID
+	GetSurfaceIDFromRole(AnyObjectID) *ObjectID[WlSurface]
 
 	GetSurfaceFromRole(AnyObjectID) any
 
 	GetGlobalBinds(GlobalID) any
+	AddGlobalBind(GlobalID, AnyObjectID, Version)
 }
 
 type OutgoingEvent struct {

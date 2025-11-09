@@ -178,12 +178,12 @@ func (t *XdgToplevel) XdgToplevel_set_minimized(
 	// TODO: Implement minimize behavior if desired
 }
 
-func (t *XdgToplevel) XdgToplevel_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.XdgToplevel],
+func (t *XdgToplevel) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.XdgToplevel],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 	// No-op
 }

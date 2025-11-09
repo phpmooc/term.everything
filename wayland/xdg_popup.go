@@ -91,12 +91,12 @@ func (x *XdgPopup) XdgPopup_reposition(
 
 }
 
-func (x *XdgPopup) XdgPopup_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.XdgPopup],
+func (x *XdgPopup) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.XdgPopup],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 }
 

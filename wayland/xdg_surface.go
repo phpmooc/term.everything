@@ -304,11 +304,11 @@ func (x *XdgSurface) XdgSurface_ack_configure(
 	}
 }
 
-func (x *XdgSurface) XdgSurface_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.XdgSurface],
+func (x *XdgSurface) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	newID protocols.ObjectID[protocols.XdgSurface],
+	newId_any protocols.AnyObjectID,
 	version uint32,
 ) {
 }

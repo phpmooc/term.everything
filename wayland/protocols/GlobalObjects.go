@@ -3,39 +3,55 @@ package protocols
 type GlobalID AnyObjectID
 type Version uint32
 
-type GlobalWlDisplayID GlobalID
-type GlobalWlCompositorID GlobalID
-type GlobalWlSubcompositorID GlobalID
-type GlobalWlOutputID GlobalID
-type GlobalWlSeatID GlobalID
-type GlobalWlShmID GlobalID
-type GlobalXdgWmBaseID GlobalID
-type GlobalWlDataDeviceManagerID GlobalID
-type GlobalWlKeyboardID GlobalID
-type GlobalWlPointerID GlobalID
-type GlobalZwpXwaylandKeyboardGrabManagerV1ID GlobalID
-type GlobalXwaylandShellV1ID GlobalID
-type GlobalWlDataDeviceID GlobalID
-type GlobalWlTouchID GlobalID
-type GlobalZxdgDecorationManagerV1ID GlobalID
-
 const (
-	GlobalID_WlDisplay                        GlobalWlDisplayID                        = 1
-	GlobalID_WlCompositor                     GlobalWlCompositorID                     = 0xff00000
-	GlobalID_WlSubcompositor                  GlobalWlSubcompositorID                  = 0xff00001
-	GlobalID_WlOutput                         GlobalWlOutputID                         = 0xff00002
-	GlobalID_WlSeat                           GlobalWlSeatID                           = 0xff00003
-	GlobalID_WlShm                            GlobalWlShmID                            = 0xff00004
-	GlobalID_XdgWmBase                        GlobalXdgWmBaseID                        = 0xff00005
-	GlobalID_WlDataDeviceManager              GlobalWlDataDeviceManagerID              = 0xff00006
-	GlobalID_WlKeyboard                       GlobalWlKeyboardID                       = 0xff00007
-	GlobalID_WlPointer                        GlobalWlPointerID                        = 0xff00008
-	GlobalID_ZwpXwaylandKeyboardGrabManagerV1 GlobalZwpXwaylandKeyboardGrabManagerV1ID = 0xff00009
-	GlobalID_XwaylandShellV1                  GlobalXwaylandShellV1ID                  = 0xff00011
-	GlobalID_WlDataDevice                     GlobalWlDataDeviceID                     = 0xff00012
-	GlobalID_WlTouch                          GlobalWlTouchID                          = 0xff00013
-	GlobalID_ZxdgDecorationManagerV1          GlobalZxdgDecorationManagerV1ID          = 0xff00014
+	GlobalID_WlDisplay                        GlobalID = 1
+	GlobalID_WlCompositor                     GlobalID = 0xff00000
+	GlobalID_WlSubcompositor                  GlobalID = 0xff00001
+	GlobalID_WlOutput                         GlobalID = 0xff00002
+	GlobalID_WlSeat                           GlobalID = 0xff00003
+	GlobalID_WlShm                            GlobalID = 0xff00004
+	GlobalID_XdgWmBase                        GlobalID = 0xff00005
+	GlobalID_WlDataDeviceManager              GlobalID = 0xff00006
+	GlobalID_WlKeyboard                       GlobalID = 0xff00007
+	GlobalID_WlPointer                        GlobalID = 0xff00008
+	GlobalID_ZwpXwaylandKeyboardGrabManagerV1 GlobalID = 0xff00009
+	GlobalID_XwaylandShellV1                  GlobalID = 0xff00011
+	GlobalID_WlDataDevice                     GlobalID = 0xff00012
+	GlobalID_WlTouch                          GlobalID = 0xff00013
+	GlobalID_ZxdgDecorationManagerV1          GlobalID = 0xff00014
 )
+
+type AdvertisedGlobalObjectName struct {
+	Name    string
+	Id      GlobalID
+	Version uint32
+}
+
+var AdvertisedGlobalObjectNames = []AdvertisedGlobalObjectName{
+	{"wl_compositor", GlobalID_WlCompositor, 6},
+	/**
+	 * Turning off the wl_subcompositor will turn off
+	 * decorations. Any other side effects??? Looks like
+	 * GameScope has it turned off, so maybe we could do that
+	 * too.
+	 *
+	 * some programs will crash if wl_subcompositor is not
+	 * advertised.
+	 */
+	{"wl_subcompositor", GlobalID_WlSubcompositor, 1},
+	{"wl_output", GlobalID_WlOutput, 5},
+
+	{"wl_seat", GlobalID_WlSeat, 10},
+	{"wl_shm", GlobalID_WlShm, 2},
+	{"xdg_wm_base", GlobalID_XdgWmBase, 6},
+	{"wl_data_device_manager", GlobalID_WlDataDeviceManager, 3},
+	{"zxdg_decoration_manager_v1", GlobalID_ZxdgDecorationManagerV1, 1},
+	/**
+	 * @TODO only advertise these to Xwayland clients
+	 */
+	{"zwp_xwayland_keyboard_grab_manager_v1", GlobalID_ZwpXwaylandKeyboardGrabManagerV1, 1},
+	{"xwayland_shell_v1", GlobalID_XwaylandShellV1, 1},
+}
 
 func GetGlobalWlDisplayBinds(cs ClientState) *map[ObjectID[WlDisplay]]Version {
 

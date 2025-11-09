@@ -152,12 +152,12 @@ func MakeWlShmPool(
 	return &protocols.WlShmPool{Delegate: pool}
 }
 
-func (p *WlShmPool) WlBuffer_on_bind(
-	_s protocols.ClientState,
-	_name protocols.ObjectID[protocols.WlBuffer],
-	_interface_ string,
-	_newID protocols.ObjectID[protocols.WlBuffer],
-	_version uint32,
+func (p *WlShmPool) OnBind(
+	s protocols.ClientState,
+	_ protocols.AnyObjectID,
+	_ string,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 	// No-op
 }

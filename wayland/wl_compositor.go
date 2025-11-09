@@ -53,11 +53,11 @@ func (c *WlCompositor) WlCompositor_create_region(
 	AddObject(s, id, region)
 }
 
-func (c *WlCompositor) WlCompositor_on_bind(
+func (c *WlCompositor) OnBind(
 	s protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlCompositor],
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.WlCompositor],
+	_ protocols.AnyObjectID,
 	version uint32,
 ) {
 	s.SetCompositorVersion(version)

@@ -12,13 +12,14 @@ func (o *WlOutput) WlOutput_release(s protocols.ClientState, _ protocols.ObjectI
 	return true
 }
 
-func (o *WlOutput) WlOutput_on_bind(
+func (o *WlOutput) OnBind(
 	s protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlOutput],
+	_ protocols.AnyObjectID,
 	_ string,
-	newID protocols.ObjectID[protocols.WlOutput],
+	newId_any protocols.AnyObjectID,
 	version uint32,
 ) {
+	newID := protocols.ObjectID[protocols.WlOutput](newId_any)
 	o.Version = version
 
 	protocols.WlOutput_scale(s, o.Version, newID, 1)

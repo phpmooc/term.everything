@@ -32,13 +32,23 @@ func (s *WlShm) WlShm_release(
 	return true
 }
 
-func (s *WlShm) WlShm_on_bind(
+func (s *WlShm) OnBind(
 	cs protocols.ClientState,
-	_name protocols.ObjectID[protocols.WlShm],
-	_interface_ string,
-	newID protocols.ObjectID[protocols.WlShm],
-	_version uint32,
+	_ protocols.AnyObjectID,
+	_ string,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
+
+	// WlShm_on_bind(
+	// 	cs protocols.ClientState,
+	// 	_name protocols.ObjectID[protocols.WlShm],
+	// 	_interface_ string,
+	// 	newID protocols.ObjectID[protocols.WlShm],
+	// 	_version uint32,
+	// ) {
+	newID := protocols.ObjectID[protocols.WlShm](newId_any)
+
 	protocols.WlShm_format(cs, newID, protocols.WlShmFormat_enum_argb8888)
 }
 

@@ -234,12 +234,12 @@ func (w *WlSurface) WlSurface_offset(
 	w.PendingUpdate.Offset = &Point{X: x, Y: y}
 }
 
-func (w *WlSurface) WlSurface_on_bind(
-	s protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlSurface],
+func (w *WlSurface) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.WlSurface],
-	version_number uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 }
 

@@ -20,11 +20,11 @@ type WlKeyboard struct {
 func (o *WlKeyboard) WlKeyboard_release(s protocols.ClientState, _ protocols.ObjectID[protocols.WlKeyboard]) bool {
 	return true
 }
-func (o *WlKeyboard) WlKeyboard_on_bind(
+func (o *WlKeyboard) OnBind(
 	s protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlKeyboard],
+	_ protocols.AnyObjectID,
 	_ string,
-	newID protocols.ObjectID[protocols.WlKeyboard],
+	_ protocols.AnyObjectID,
 	version uint32,
 ) {
 }

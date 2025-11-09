@@ -155,12 +155,12 @@ func (ss *WlSubsurface) WlSubsurface_set_desync(
 	ss.Sync = false
 }
 
-func (ss *WlSubsurface) WlSubsurface_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlSubsurface],
+func (ss *WlSubsurface) OnBind(
+	cs protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.WlSubsurface],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 	// No-op
 }

@@ -41,12 +41,12 @@ func (r *WlRegion) WlRegion_subtract(
 	// TODO: Implement proper region subtraction semantics.
 }
 
-func (r *WlRegion) WlRegion_on_bind(
-	_ protocols.ClientState,
-	_ protocols.ObjectID[protocols.WlRegion],
+func (r *WlRegion) OnBind(
+	s protocols.ClientState,
+	_ protocols.AnyObjectID,
 	_ string,
-	_ protocols.ObjectID[protocols.WlRegion],
-	_ uint32,
+	newId_any protocols.AnyObjectID,
+	version uint32,
 ) {
 	// No-op for wl_region
 }

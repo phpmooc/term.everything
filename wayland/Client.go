@@ -1,406 +1,672 @@
 package wayland
 
-// type SendMessage struct {
-//   ObjectID int32;
-//   Opcode int32;
-//   Data []byte;
-//   FileDescriptor int32;
-// }
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"syscall"
+	"time"
 
-// type DebugSendMessage struct {
-// 	  SendMessage
-// 	    ObjectName string;
-// 		MessageName string;
-// 		MessageArgs []struct {
-// 		  Signature string
-// 		  Value any
-// 		};
-// }
+	"github.com/mmulet/term.everything/wayland/protocols"
+)
 
-// func (* SendMessage) isDebugSendMessage () bool {
-//   return false;
-// }
-// func (* DebugSendMessage) isDebugSendMessage () bool {
-//   return true;
-// }
+type WaylandClient struct {
+	drawableSurfaces map[protocols.ObjectID[protocols.WlSurface]]bool
+	topLevelSurfaces map[protocols.ObjectID[protocols.XdgToplevel]]bool
 
-// import {
-//   Global_ID_To_Object_ID,
-//   safe_cast_global_id_to_object_id,
-// } from "./GlobalObjects_To_ID.ts";
-// import { Role_or_xdg_surface_Object_ID } from "./Role_or_xdg_surface_Object_ID.ts";
-// import { Surface_Role } from "./Surface_Role.ts";
-// import { Object_ID_To_Wayland_Object } from "./Object_ID_To_Wayland_Object.ts";
+	// transport
+	conn *net.UnixConn
 
-// export class Wayland_Client implements File_Descriptor_Claim, Sender {
-//   drawable_surfaces = new Set<Object_ID<wl_surface>>();
+	// protocol version bits
+	compositorVersion uint32
 
-//   top_level_surfaces = new Set<Object_ID<xdg_toplevel>>();
+	// id of the wl_display object for this client (usually 1)
+	displayID protocols.ObjectID[protocols.WlDisplay]
 
-//   add_frame_draw_request = (callback_id: Object_ID<wl_callback>) => {
-//     this.frame_draw_requests.push(callback_id);
-//   };
-//   /**
-//    * surface methods
-//    * */
+	// recv buffer
+	recvBuf []byte
 
-//   get_surface_id_from_role = (
-//     role_object_id: Role_or_xdg_surface_Object_ID
-//   ) => {
-//     return this.roles_to_surfaces.get(role_object_id);
-//   };
+	// outgoing event queue (channel-based)
+	outgoing chan protocols.OutgoingEvent
 
-//   get_surface_from_role = (role_object_id: Role_or_xdg_surface_Object_ID) => {
-//     const surface_id = this.get_surface_id_from_role(role_object_id);
-//     if (surface_id === undefined) {
-//       return undefined;
-//     }
-//     return this.get_object(surface_id)?.delegate;
-//   };
+	// decoded message framing
+	decoder messageDecoder
 
-//   get_role_data_from_role = <T extends Surface_Role["type"]>(
-//     role_object_id: Object_ID,
-//     role: T
-//   ): Extract<Surface_Role, { type: T }>["data"] | null => {
-//     const surface = this.get_surface_from_role(role_object_id);
-//     if (!surface) {
-//       return null;
-//     }
-//     if (!surface.role) {
-//       return null;
-//     }
-//     if (surface.role.type !== role) {
-//       return null;
-//     }
-//     return surface.role.data as any;
-//   };
+	// FD queue claimed by requests that accept an fd (single-threaded access)
+	unclaimedFDs []protocols.FileDescriptor
 
-//   register_role_to_surface = (
-//     role_id: Role_or_xdg_surface_Object_ID,
-//     surface_id: Object_ID<wl_surface>
-//   ) => {
-//     this.roles_to_surfaces.set(role_id, surface_id);
-//   };
+	// object store
+	objects map[protocols.AnyObjectID]any
 
-//   unregister_role_to_surface = (role_id: Role_or_xdg_surface_Object_ID) => {
-//     this.roles_to_surfaces.delete(role_id);
-//   };
+	// role -> surface mapping
+	rolesToSurfaces map[protocols.AnyObjectID]protocols.ObjectID[protocols.WlSurface]
 
-//   /**
-//    * Seed if maybe_desceneding_id is a descendant of surface_id
-//    * @param s
-//    * @param surface_id
-//    * @param maybe_descendant_id
-//    */
-//   find_descendant_surface = (
-//     surface_id: Object_ID<wl_surface>,
-//     maybe_descendant_id: Object_ID<wl_surface>
-//   ): boolean => {
-//     const surface = this.get_object(surface_id)?.delegate;
-//     if (!surface) {
-//       return false;
-//     }
-//     for (const child_id of surface.children_in_draw_order) {
-//       if (child_id === maybe_descendant_id) {
-//         return true;
-//       }
-//     }
+	// frame callbacks queued by wl_surface.frame
+	frameDrawRequests []protocols.ObjectID[protocols.WlCallback]
 
-//     for (const child_id of surface.children_in_draw_order) {
-//       if (child_id === null) {
-//         continue;
-//       }
-//       if (this.find_descendant_surface(child_id, maybe_descendant_id)) {
-//         return true;
-//       }
-//     }
-//     return false;
-//   };
+	// global binds: one holder keyed by GlobalID; the value is a pointer to the
+	// correctly-typed map[*ObjectID[T]]Version, created on demand.
+	globalBinds map[protocols.GlobalID]any
+}
 
-//   compositor_version: version = 1;
+func (c *WaylandClient) AddFrameDrawRequest(cb protocols.ObjectID[protocols.WlCallback]) {
+	c.frameDrawRequests = append(c.frameDrawRequests, cb)
+}
 
-//   /**
-//    * A map from a role_object_id to a surface_id
-//    */
-//   roles_to_surfaces: Map<Role_or_xdg_surface_Object_ID, Object_ID<wl_surface>> =
-//     new Map();
+func (c *WaylandClient) GetSurfaceIDFromRole(roleObjectID protocols.AnyObjectID) *protocols.ObjectID[protocols.WlSurface] {
+	if sid, ok := c.rolesToSurfaces[roleObjectID]; ok {
+		return &sid
+	}
+	return nil
+}
 
-//   frame_draw_requests: Object_ID<wl_callback>[] = [];
+func (c *WaylandClient) GetSurfaceFromRole(roleObjectID protocols.AnyObjectID) any {
+	sidAny := c.GetSurfaceIDFromRole(roleObjectID)
+	if sidAny == nil {
+		return nil
+	}
+	surface := GetWlSurfaceObject(c, *sidAny)
+	return surface
+}
 
-//   // object_state: Object_State = {};
+func (c *WaylandClient) UnregisterRoleToSurface(roleID protocols.AnyObjectID) {
+	delete(c.rolesToSurfaces, roleID)
+}
 
-//   send_error = (object_id: Object_ID, code: number, message: string) => {
-//     wl_display.error(
-//       this,
-//       safe_cast_global_id_to_object_id(Global_Ids.wl_display),
-//       object_id,
-//       code,
-//       message
-//     );
-//   };
+func (c *WaylandClient) RegisterRoleToSurface(roleID protocols.AnyObjectID, surfaceID protocols.ObjectID[protocols.WlSurface]) {
+	c.rolesToSurfaces[roleID] = surfaceID
+}
 
-//   message_buffer = new Uint8Array(1024);
-//   file_descriptor_buffer = new Uint32Array(255);
+/**
+ * Seed if maybe_desceneding_id is a descendant of surface_id
+ * @param s
+ * @param surface_id
+ * @param maybe_descendant_id
+ */
+func (c *WaylandClient) FindDescendantSurface(surfaceID protocols.ObjectID[protocols.WlSurface], maybeDescendantID protocols.ObjectID[protocols.WlSurface]) bool {
 
-//   send_message_buffer = new Uint8Array(1024);
-//   send_file_descriptor_buffer = new Uint32Array(255);
+	surface := GetWlSurfaceObject(c, surfaceID)
+	if surface == nil {
+		return false
+	}
 
-//   objects: Map<Object_ID, Wayland_Object<any>> = new Map();
-//   _global_binds: Map<Global_Ids, Map<Object_ID, version>> = new Map();
+	for _, childID := range surface.ChildrenInDrawOrder {
+		if childID == nil {
+			continue
+		}
+		if *childID == maybeDescendantID {
+			return true
+		}
+	}
 
-//   get_global_binds = <T extends Global_Ids>(
-//     global_id: T
-//   ): Map<Global_ID_To_Object_ID<T>, version> | undefined => {
-//     return this._global_binds.get(global_id) as Map<
-//       Global_ID_To_Object_ID<T>,
-//       version
-//     >;
-//   };
+	for _, childID := range surface.ChildrenInDrawOrder {
+		if childID == nil {
+			continue
+		}
+		if c.FindDescendantSurface(*childID, maybeDescendantID) {
+			return true
+		}
+	}
 
-//   remove_global_bind = <T extends Global_Ids>(
-//     global_id: T,
-//     object_id: Global_ID_To_Object_ID<T>
-//   ) => {
-//     const set = this._global_binds.get(global_id);
-//     if (set == undefined) {
-//       return;
-//     }
-//     set.delete(object_id);
-//   };
+	return false
+}
 
-//   /**
-//    * Add a bound object_id to a list
-//    * of global_ids. SO that you can
-//    * ask, What are all the objects bound
-//    * to this global for this client?
-//    * @param global_id
-//    * @param object_id
-//    */
-//   add_global_bind = <T extends Global_Ids>(
-//     global_id: T,
-//     object_id: Global_ID_To_Object_ID<T>,
-//     version: version
-//   ) => {
-//     if (!this._global_binds.has(global_id)) {
-//       this._global_binds.set(global_id, new Map());
-//     }
-//     this._global_binds.get(global_id)?.set(object_id, version);
-//   };
+//TODO continue looking through wayland client.t
 
-//   add_object = <T extends Object_ID>(
-//     object_id: T,
-//     object: T extends Object_ID<infer K> ? K : never
-//   ) => {
-//     if (object == undefined) {
-//       console.log("object is undefined cannot add it", object_id);
-//     }
-//     if (this.objects.has(object_id)) {
-//       console.log("object already exists", object_id);
-//     }
-//     this.objects.set(object_id, object);
-//   };
-//   remove_object = (object_id: Object_ID) => {
-//     this.objects.delete(object_id);
-//   };
+func NewWaylandClient(conn *net.UnixConn) *WaylandClient {
+	return &WaylandClient{
+		conn:              conn,
+		compositorVersion: 1,
+		displayID:         protocols.ObjectID[protocols.WlDisplay](1),
 
-//   get_object = <T extends Object_ID>(
-//     object_id: T
-//   ): Object_ID_To_Wayland_Object<T> | undefined => {
-//     return (
-//       this.objects.get(object_id) ?? (global_objects.objects[object_id] as any)
-//     );
-//   };
+		recvBuf: make([]byte, 64*1024),
 
-//   // get_object_delegate_cast_to = <T>(object_id: Object_ID): T | undefined => {
-//   //   return (
-//   //     (this.get_object(object_id)?.delegate as T) ??
-//   //     (global_objects.objects[object_id]?.delegate as T)
-//   //   );
-//   // };
-//   pending_message: Send_Message[] = [];
+		outgoing: make(chan protocols.OutgoingEvent, 256),
 
-//   message_decoder = new Message_Decoder();
+		unclaimedFDs:    make([]protocols.FileDescriptor, 0, 8),
+		objects:         make(map[protocols.AnyObjectID]any),
+		rolesToSurfaces: make(map[protocols.AnyObjectID]protocols.ObjectID[protocols.WlSurface]),
 
-//   unclaimed_file_descriptors: File_Descriptor[] = [];
+		drawableSurfaces: make(map[protocols.ObjectID[protocols.WlSurface]]bool),
+		topLevelSurfaces: make(map[protocols.ObjectID[protocols.XdgToplevel]]bool),
 
-//   constructor(
-//     public client_socket: number,
-//     public client_state: Client_State
-//   ) {
-//     if (wayland_debug_time_only()) {
-//       console.log(`new client`, client_socket);
-//     }
-//   }
+		globalBinds: make(map[protocols.GlobalID]any),
+	}
+}
 
-//   main_loop = async () => {
-//     while (true) {
-//       for (const message of this.pending_message) {
-//         const should_continue = await this.send_pending_messages(message);
-//         if (!should_continue) {
-//           return;
-//         }
-//       }
+func (c *WaylandClient) MainLoop() {
+	for {
+		// Drain all pending outgoing events first (non-blocking drain).
+		for {
+			select {
+			case ev := <-c.outgoing:
+				if !c.sendOne(ev) {
+					return
+				}
+			default:
+				goto drained
+			}
+		}
+	drained:
 
-//       this.pending_message = [];
+		// Receive once with short deadline; parse and dispatch.
+		n, fds, shouldContinue, err := GetMessageAndFileDescriptors(c.conn, c.recvBuf)
+		if err != nil {
+			// treat unexpected read errors as fatal
+			log.Printf("Recv error: %v", err)
+			return
+		}
+		if !shouldContinue {
+			// orderly shutdown or fatal error
+			return
+		}
 
-//       const message = await get_message_and_file_descriptors(
-//         this.client_socket,
-//         this.message_buffer,
-//         this.file_descriptor_buffer
-//       );
-//       const should_continue = this.parse_messages(message);
-//       if (!should_continue) {
-//         return;
-//       }
-//     }
-//   };
+		// Add any received FDs to the queue (single-threaded context).
+		if len(fds) > 0 && WaylandDebugTimeOnly() {
+			log.Printf("client: received %d file descriptors", len(fds))
+		}
+		for _, fd := range fds {
+			c.unclaimedFDs = append(c.unclaimedFDs, protocols.FileDescriptor(fd))
+		}
 
-//   /**
-//    *
-//    * Adds the message to the pending message queue
-//    */
-//   send = (data: Send_Message) => {
-//     this.pending_message.push(data);
-//   };
-//   /**
-//    *
-//    * @param message
-//    * @returns Returns if we should continue listening or sending on this socket any more
-//    * returns falsy mostly if the client has disconnected
-//    */
-//   send_pending_messages = async (message: Send_Message): Promise<boolean> => {
-//     if (wayland_debug_time_only()) {
-//       if (is_debug_send_message(message)) {
-//         console.log(
-//           `client#${this.client_socket} -> ${message.object_name}@${message.object_id}.${message.message_name}(${message.message_args.map(({ signature, value }) => `${signature} = ${value}`).join(", ")})`
-//         );
-//       }
-//     }
-//     /**
-//      * 8 bytes is the header length + the length of the message
-//      * #### Header is
-//      * - 4 bytes for object_id
-//      * - 2 bytes for opcode
-//      * - 2 bytes for size
-//      */
-//     const length = 8 + message.data.length;
+		// If timeout / nothing read, avoid tight loop.
+		if n == 0 {
+			time.Sleep(1 * time.Millisecond)
+			continue
+		}
 
-//     this.send_message_buffer.set(
-//       new Uint8Array([
-//         message.object_id & 0xff,
-//         (message.object_id >> 8) & 0xff,
-//         (message.object_id >> 16) & 0xff,
-//         (message.object_id >> 24) & 0xff,
-//         message.opcode & 0xff,
-//         (message.opcode >> 8) & 0xff,
-//         length & 0xff,
-//         (length >> 8) & 0xff,
-//       ])
-//     );
-//     if (message.data.length > 0) {
-//       this.send_message_buffer.set(message.data, 8);
-//     }
-//     this.send_file_descriptor_buffer[0] = message.file_descriptor ?? 0;
+		// Decode into frames and dispatch.
+		msgs := c.decoder.Consume(c.recvBuf[:n])
+		for i := range msgs {
+			m := msgs[i]
+			obj := c.GetObject(m.ObjectID)
+			if obj == nil {
+				if WaylandDebugTimeOnly() {
+					log.Printf("client: request for unknown object %d", uint32(m.ObjectID))
+				}
+				continue
+			}
+			switch oo := obj.(type) {
+			case protocols.WaylandObject[protocols.WlDisplay_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlRegistry_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlCompositor_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlShm_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlShmPool_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlBuffer_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlSurface_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlRegion_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlSeat_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlPointer_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlKeyboard_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlTouch_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlDataDeviceManager_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlDataDevice_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlDataSource_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlDataOffer_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlShell_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlShellSurface_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlSubcompositor_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.WlSubsurface_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XdgWmBase_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XdgSurface_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XdgToplevel_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XdgPositioner_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XdgPopup_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.ZxdgToplevelDecorationV1_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.ZxdgDecorationManagerV1_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.ZwpXwaylandKeyboardGrabManagerV1_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XwaylandShellV1_delegate]:
+				oo.OnRequest(c, m)
+			case protocols.WaylandObject[protocols.XwaylandSurfaceV1_delegate]:
+				oo.OnRequest(c, m)
+			default:
+				log.Printf("client: object %d has unknown type; cannot dispatch", uint32(m.ObjectID))
+			}
+		}
+	}
+}
 
-//     let offset = 0;
-//     while (true) {
-//       if (offset > 0) {
-//         console.log("\nsending more data\n");
-//       }
-//       const data_view = this.send_message_buffer.subarray(offset, length);
-//       /**
-//        * only send the file descriptor on the first message
-//        */
-//       const file_descriptor_view =
-//         offset == 0 && message.file_descriptor != null
-//           ? this.send_file_descriptor_buffer.subarray(0, 1)
-//           : this.send_file_descriptor_buffer.subarray(0, 0);
+// Sender: enqueue event via channel
+func (c *WaylandClient) Send(ev protocols.OutgoingEvent) {
+	// Allow backpressure to naturally block the sender goroutine.
+	c.outgoing <- ev
+}
 
-//       this.send_message_buffer.subarray();
+// encode and send one event (with optional FD)
+func (c *WaylandClient) sendOne(ev protocols.OutgoingEvent) bool {
+	if WaylandDebugTimeOnly() {
+		log.Printf("client -> eid=%d opcode=%d len=%d fd=%v",
+			uint32(ev.ObjectID), ev.Opcode, len(ev.Data), ev.FileDescriptor)
+	}
+	size := 8 + len(ev.Data)
+	buf := make([]byte, size)
 
-//       const { should_continue, bytes_written } =
-//         await send_message_and_file_descriptors(
-//           this.client_socket,
-//           data_view,
-//           file_descriptor_view
-//         );
+	// Wayland header: object_id (u32), size (u16), opcode (u16)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(ev.ObjectID))
+	binary.LittleEndian.PutUint16(buf[4:6], uint16(size))
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(ev.Opcode))
+	copy(buf[8:], ev.Data)
 
-//       if (!should_continue) {
-//         return false;
-//       }
+	var fds []int
+	if ev.FileDescriptor != nil {
+		fds = []int{int(*ev.FileDescriptor)}
+	}
 
-//       offset += bytes_written;
-//       if (offset >= length) {
-//         break;
-//       }
-//     }
-//     return true;
-//   };
+	n, ok, err := SendMessageAndFileDescriptors(c.conn, buf, fds)
+	if err != nil {
+		// if EPIPE or similar => disconnect
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+			return false
+		}
+		log.Printf("Send error: %v (n=%d ok=%v)", err, n, ok)
+		return false
+	}
+	return true
+}
 
-//   /**
-//    *
-//    * @param param0
-//    * @returns true if should continue listening for more messages
-//    */
-//   parse_messages = ({
-//     should_continue,
-//     bytes_read,
-//     number_of_file_descriptors: file_descriptors,
-//   }: {
-//     should_continue: boolean;
-//     bytes_read: number;
-//     number_of_file_descriptors: number;
-//   }): boolean => {
-//     for (let i = 0; i < file_descriptors; i++) {
-//       if (wayland_debug_time_only()) {
-//         console.log(
-//           `client#${this.client_socket}: Received File descriptor`,
-//           this.file_descriptor_buffer[i]
-//         );
-//       }
-//       this.unclaimed_file_descriptors.push(
-//         this.file_descriptor_buffer[i] as File_Descriptor
-//       );
-//     }
+// recvOnce is folded into MainLoop via GetMessageAndFileDescriptors
 
-//     if (bytes_read < 0) {
-//       console.log("error reading message from client");
-//       console.error("Failed to read message from client");
-//       return false;
-//     }
-//     if (!should_continue) {
-//       return false;
-//     }
+// messageDecoder turns a byte stream into DecodeState frames
+type messageDecoder struct {
+	buf []byte
+}
 
-//     if (bytes_read === 0) {
-//       /**
-//        * Time out
-//        */
-//       return true;
-//     }
+func (d *messageDecoder) Consume(in []byte) []protocols.DecodeState {
+	// append
+	d.buf = append(d.buf, in...)
 
-//     const new_messages = this.message_decoder.consume(
-//       this.message_buffer,
-//       bytes_read
-//     );
+	var out []protocols.DecodeState
+	for {
+		if len(d.buf) < 8 {
+			break
+		}
+		objectID := binary.LittleEndian.Uint32(d.buf[0:4])
+		size := binary.LittleEndian.Uint16(d.buf[4:6])
+		opcode := binary.LittleEndian.Uint16(d.buf[6:8])
 
-//     for (const message of new_messages) {
-//       const object = this.get_object(message.object_id);
-//       if (object == undefined) {
-//         console.log("can not do request on undefined", message.object_id);
-//       }
-//       object?.on_request(this, message);
-//     }
+		if int(size) < 8 {
+			// invalid; drop
+			d.buf = nil
+			break
+		}
+		if len(d.buf) < int(size) {
+			// incomplete
+			break
+		}
+		payload := make([]byte, int(size)-8)
+		copy(payload, d.buf[8:size])
 
-//     return true;
-//   };
+		out = append(out, protocols.DecodeState{
+			ObjectID: protocols.AnyObjectID(objectID),
+			Opcode:   opcode,
+			Size:     size,
+			Data:     payload,
+		})
+		d.buf = d.buf[size:]
+	}
+	return out
+}
 
-//   claim_file_descriptor: File_Descriptor_Claim["claim_file_descriptor"] =
-//     () => {
-//       const number = this.unclaimed_file_descriptors.shift();
-//       if (number == undefined) {
-//         return null as unknown as File_Descriptor;
-//       }
-//       return number;
-//     };
-// }
+// -------- ClientState implementation (single-threaded via MainLoop) --------
+
+func (c *WaylandClient) RemoveObject(id protocols.AnyObjectID) {
+	delete(c.objects, id)
+	// Optional: wl_display.delete_id could be emitted here if desired.
+}
+
+func (c *WaylandClient) RemoveGlobalBind(globalID protocols.GlobalID, id protocols.AnyObjectID) {
+	switch globalID {
+	case protocols.GlobalID_WlDisplay:
+		if m := c.ensureGlobalMap_WlDisplay(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlDisplay](id))
+		}
+	case protocols.GlobalID_WlCompositor:
+		if m := c.ensureGlobalMap_WlCompositor(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlCompositor](id))
+		}
+	case protocols.GlobalID_WlSubcompositor:
+		if m := c.ensureGlobalMap_WlSubcompositor(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlSubcompositor](id))
+		}
+	case protocols.GlobalID_WlOutput:
+		if m := c.ensureGlobalMap_WlOutput(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlOutput](id))
+		}
+	case protocols.GlobalID_WlSeat:
+		if m := c.ensureGlobalMap_WlSeat(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlSeat](id))
+		}
+	case protocols.GlobalID_WlShm:
+		if m := c.ensureGlobalMap_WlShm(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlShm](id))
+		}
+	case protocols.GlobalID_XdgWmBase:
+		if m := c.ensureGlobalMap_XdgWmBase(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.XdgWmBase](id))
+		}
+	case protocols.GlobalID_WlDataDeviceManager:
+		if m := c.ensureGlobalMap_WlDataDeviceManager(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlDataDeviceManager](id))
+		}
+	case protocols.GlobalID_WlKeyboard:
+		if m := c.ensureGlobalMap_WlKeyboard(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlKeyboard](id))
+		}
+	case protocols.GlobalID_WlPointer:
+		if m := c.ensureGlobalMap_WlPointer(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlPointer](id))
+		}
+	case protocols.GlobalID_ZwpXwaylandKeyboardGrabManagerV1:
+		if m := c.ensureGlobalMap_ZwpXwaylandKeyboardGrabManagerV1(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.ZwpXwaylandKeyboardGrabManagerV1](id))
+		}
+	case protocols.GlobalID_XwaylandShellV1:
+		if m := c.ensureGlobalMap_XwaylandShellV1(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.XwaylandShellV1](id))
+		}
+	case protocols.GlobalID_WlDataDevice:
+		if m := c.ensureGlobalMap_WlDataDevice(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlDataDevice](id))
+		}
+	case protocols.GlobalID_WlTouch:
+		if m := c.ensureGlobalMap_WlTouch(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.WlTouch](id))
+		}
+	case protocols.GlobalID_ZxdgDecorationManagerV1:
+		if m := c.ensureGlobalMap_ZxdgDecorationManagerV1(); m != nil {
+			delete(*m, protocols.ObjectID[protocols.ZxdgDecorationManagerV1](id))
+		}
+	default:
+	}
+}
+
+func (c *WaylandClient) AddObject(id protocols.AnyObjectID, v any) {
+	if v == nil {
+		log.Printf("AddObject: object is nil for id %d", uint32(id))
+		return
+	}
+	c.objects[id] = v
+}
+
+func (c *WaylandClient) SetCompositorVersion(v uint32) { c.compositorVersion = v }
+func (c *WaylandClient) GetCompositorVersion() uint32  { return c.compositorVersion }
+
+func (c *WaylandClient) GetObject(id protocols.AnyObjectID) any {
+	return c.objects[id]
+}
+
+func (c *WaylandClient) SendError(objectID protocols.AnyObjectID, code uint32, message string) {
+	protocols.WlDisplay_error(c, c.displayID, objectID, code, message)
+}
+
+func (c *WaylandClient) DrawableSurfaces() map[protocols.ObjectID[protocols.WlSurface]]bool {
+	return c.drawableSurfaces
+}
+func (c *WaylandClient) TopLevelSurfaces() map[protocols.ObjectID[protocols.XdgToplevel]]bool {
+	return c.topLevelSurfaces
+}
+
+// Typed getter used by generated helpers (expects a pointer to a typed map)
+func (c *WaylandClient) GetGlobalBinds(globalID protocols.GlobalID) any {
+	switch globalID {
+	case protocols.GlobalID_WlDisplay:
+		return c.ensureGlobalMap_WlDisplay()
+	case protocols.GlobalID_WlCompositor:
+		return c.ensureGlobalMap_WlCompositor()
+	case protocols.GlobalID_WlSubcompositor:
+		return c.ensureGlobalMap_WlSubcompositor()
+	case protocols.GlobalID_WlOutput:
+		return c.ensureGlobalMap_WlOutput()
+	case protocols.GlobalID_WlSeat:
+		return c.ensureGlobalMap_WlSeat()
+	case protocols.GlobalID_WlShm:
+		return c.ensureGlobalMap_WlShm()
+	case protocols.GlobalID_XdgWmBase:
+		return c.ensureGlobalMap_XdgWmBase()
+	case protocols.GlobalID_WlDataDeviceManager:
+		return c.ensureGlobalMap_WlDataDeviceManager()
+	case protocols.GlobalID_WlKeyboard:
+		return c.ensureGlobalMap_WlKeyboard()
+	case protocols.GlobalID_WlPointer:
+		return c.ensureGlobalMap_WlPointer()
+	case protocols.GlobalID_ZwpXwaylandKeyboardGrabManagerV1:
+		return c.ensureGlobalMap_ZwpXwaylandKeyboardGrabManagerV1()
+	case protocols.GlobalID_XwaylandShellV1:
+		return c.ensureGlobalMap_XwaylandShellV1()
+	case protocols.GlobalID_WlDataDevice:
+		return c.ensureGlobalMap_WlDataDevice()
+	case protocols.GlobalID_WlTouch:
+		return c.ensureGlobalMap_WlTouch()
+	case protocols.GlobalID_ZxdgDecorationManagerV1:
+		return c.ensureGlobalMap_ZxdgDecorationManagerV1()
+	default:
+		return nil
+	}
+}
+
+func (c *WaylandClient) AddGlobalBind(globalID protocols.GlobalID, objectID protocols.AnyObjectID, version protocols.Version) {
+	switch globalID {
+	case protocols.GlobalID_WlDisplay:
+		m := c.ensureGlobalMap_WlDisplay()
+		(*m)[protocols.ObjectID[protocols.WlDisplay](objectID)] = version
+	case protocols.GlobalID_WlCompositor:
+		m := c.ensureGlobalMap_WlCompositor()
+		(*m)[protocols.ObjectID[protocols.WlCompositor](objectID)] = version
+	case protocols.GlobalID_WlSubcompositor:
+		m := c.ensureGlobalMap_WlSubcompositor()
+		(*m)[protocols.ObjectID[protocols.WlSubcompositor](objectID)] = version
+	case protocols.GlobalID_WlOutput:
+		m := c.ensureGlobalMap_WlOutput()
+		(*m)[protocols.ObjectID[protocols.WlOutput](objectID)] = version
+	case protocols.GlobalID_WlSeat:
+		m := c.ensureGlobalMap_WlSeat()
+		(*m)[protocols.ObjectID[protocols.WlSeat](objectID)] = version
+	case protocols.GlobalID_WlShm:
+		m := c.ensureGlobalMap_WlShm()
+		(*m)[protocols.ObjectID[protocols.WlShm](objectID)] = version
+	case protocols.GlobalID_XdgWmBase:
+		m := c.ensureGlobalMap_XdgWmBase()
+		(*m)[protocols.ObjectID[protocols.XdgWmBase](objectID)] = version
+	case protocols.GlobalID_WlDataDeviceManager:
+		m := c.ensureGlobalMap_WlDataDeviceManager()
+		(*m)[protocols.ObjectID[protocols.WlDataDeviceManager](objectID)] = version
+	case protocols.GlobalID_WlKeyboard:
+		m := c.ensureGlobalMap_WlKeyboard()
+		(*m)[protocols.ObjectID[protocols.WlKeyboard](objectID)] = version
+	case protocols.GlobalID_WlPointer:
+		m := c.ensureGlobalMap_WlPointer()
+		(*m)[protocols.ObjectID[protocols.WlPointer](objectID)] = version
+	case protocols.GlobalID_ZwpXwaylandKeyboardGrabManagerV1:
+		m := c.ensureGlobalMap_ZwpXwaylandKeyboardGrabManagerV1()
+		(*m)[protocols.ObjectID[protocols.ZwpXwaylandKeyboardGrabManagerV1](objectID)] = version
+	case protocols.GlobalID_XwaylandShellV1:
+		m := c.ensureGlobalMap_XwaylandShellV1()
+		(*m)[protocols.ObjectID[protocols.XwaylandShellV1](objectID)] = version
+	case protocols.GlobalID_WlDataDevice:
+		m := c.ensureGlobalMap_WlDataDevice()
+		(*m)[protocols.ObjectID[protocols.WlDataDevice](objectID)] = version
+	case protocols.GlobalID_WlTouch:
+		m := c.ensureGlobalMap_WlTouch()
+		(*m)[protocols.ObjectID[protocols.WlTouch](objectID)] = version
+	case protocols.GlobalID_ZxdgDecorationManagerV1:
+		m := c.ensureGlobalMap_ZxdgDecorationManagerV1()
+		(*m)[protocols.ObjectID[protocols.ZxdgDecorationManagerV1](objectID)] = version
+	default:
+	}
+}
+
+// FileDescriptorClaimClientState
+func (c *WaylandClient) ClaimFileDescriptor() *protocols.FileDescriptor {
+	if len(c.unclaimedFDs) == 0 {
+		return nil
+	}
+	fd := c.unclaimedFDs[0]
+	copy(c.unclaimedFDs, c.unclaimedFDs[1:])
+	c.unclaimedFDs = c.unclaimedFDs[:len(c.unclaimedFDs)-1]
+	return &fd
+}
+
+// -------- Global binds typed-map creators (on demand) --------
+
+func (c *WaylandClient) ensureGlobalMap_WlDisplay() *map[protocols.ObjectID[protocols.WlDisplay]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlDisplay]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlDisplay]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlDisplay]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlDisplay] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlCompositor() *map[protocols.ObjectID[protocols.WlCompositor]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlCompositor]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlCompositor]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlCompositor]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlCompositor] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlSubcompositor() *map[protocols.ObjectID[protocols.WlSubcompositor]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlSubcompositor]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlSubcompositor]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlSubcompositor]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlSubcompositor] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlOutput() *map[protocols.ObjectID[protocols.WlOutput]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlOutput]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlOutput]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlOutput]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlOutput] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlSeat() *map[protocols.ObjectID[protocols.WlSeat]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlSeat]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlSeat]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlSeat]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlSeat] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlShm() *map[protocols.ObjectID[protocols.WlShm]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlShm]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlShm]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlShm]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlShm] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_XdgWmBase() *map[protocols.ObjectID[protocols.XdgWmBase]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_XdgWmBase]; ok {
+		return v.(*map[protocols.ObjectID[protocols.XdgWmBase]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.XdgWmBase]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_XdgWmBase] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlDataDeviceManager() *map[protocols.ObjectID[protocols.WlDataDeviceManager]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlDataDeviceManager]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlDataDeviceManager]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlDataDeviceManager]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlDataDeviceManager] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlKeyboard() *map[protocols.ObjectID[protocols.WlKeyboard]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlKeyboard]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlKeyboard]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlKeyboard]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlKeyboard] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlPointer() *map[protocols.ObjectID[protocols.WlPointer]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlPointer]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlPointer]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlPointer]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlPointer] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_ZwpXwaylandKeyboardGrabManagerV1() *map[protocols.ObjectID[protocols.ZwpXwaylandKeyboardGrabManagerV1]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_ZwpXwaylandKeyboardGrabManagerV1]; ok {
+		return v.(*map[protocols.ObjectID[protocols.ZwpXwaylandKeyboardGrabManagerV1]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.ZwpXwaylandKeyboardGrabManagerV1]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_ZwpXwaylandKeyboardGrabManagerV1] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_XwaylandShellV1() *map[protocols.ObjectID[protocols.XwaylandShellV1]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_XwaylandShellV1]; ok {
+		return v.(*map[protocols.ObjectID[protocols.XwaylandShellV1]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.XwaylandShellV1]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_XwaylandShellV1] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlDataDevice() *map[protocols.ObjectID[protocols.WlDataDevice]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlDataDevice]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlDataDevice]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlDataDevice]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlDataDevice] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_WlTouch() *map[protocols.ObjectID[protocols.WlTouch]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_WlTouch]; ok {
+		return v.(*map[protocols.ObjectID[protocols.WlTouch]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.WlTouch]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_WlTouch] = &m
+	return &m
+}
+func (c *WaylandClient) ensureGlobalMap_ZxdgDecorationManagerV1() *map[protocols.ObjectID[protocols.ZxdgDecorationManagerV1]]protocols.Version {
+	if v, ok := c.globalBinds[protocols.GlobalID_ZxdgDecorationManagerV1]; ok {
+		return v.(*map[protocols.ObjectID[protocols.ZxdgDecorationManagerV1]]protocols.Version)
+	}
+	m := make(map[protocols.ObjectID[protocols.ZxdgDecorationManagerV1]]protocols.Version)
+	c.globalBinds[protocols.GlobalID_ZxdgDecorationManagerV1] = &m
+	return &m
+}
+
+// -------- Extra helpers (literal conversion parity) --------
+
+// Debug hook compatible with existing code’s checks
+func WaylandDebugTimeOnly() bool {
+	return false
+}
+
+// Small utility: string for debug
+func (c *WaylandClient) String() string {
+	return fmt.Sprintf("WaylandClient(%v)", c.conn)
+}

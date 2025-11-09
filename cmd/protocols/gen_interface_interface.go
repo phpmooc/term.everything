@@ -32,10 +32,13 @@ func genInterfaceInterface(iface Interface) string {
 		b.WriteByte('\n')
 	}
 
-	b.WriteString(fmt.Sprintf(
-		"%s_on_bind(s ClientState, name ObjectID[%s], interface_ string, new_id ObjectID[%s], version_number uint32)\n",
-		iface.Name, iface.Name, iface.Name,
-	))
+	// b.WriteString(fmt.Sprintf(
+	// 	// "%s_on_bind(s ClientState, name ObjectID[%s], interface_ string, new_id ObjectID[%s], version_number uint32)\n",
+	// 	"%s_on_bind(s ClientState, name ObjectID[%s], interface_ string, new_id ObjectID[%s], version_number uint32)\n",
+	// 	iface.Name, iface.Name, iface.Name,
+	// ))
+
+	b.WriteString("OnBind(s ClientState, name AnyObjectID, interface_ string, new_id AnyObjectID, version_number uint32)\n")
 
 	switch iface.Name {
 	case "WlKeyboard":
