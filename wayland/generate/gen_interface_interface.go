@@ -6,8 +6,9 @@ import (
 )
 
 func genInterfaceInterface(iface Interface) string {
+	on_bind_declaration := "OnBind(s ClientState, name AnyObjectID, interface_ string, new_id AnyObjectID, version_number uint32)\n"
 	if len(iface.Requests) == 0 {
-		return ""
+		return on_bind_declaration
 	}
 
 	var b strings.Builder
@@ -38,7 +39,7 @@ func genInterfaceInterface(iface Interface) string {
 	// 	iface.Name, iface.Name, iface.Name,
 	// ))
 
-	b.WriteString("OnBind(s ClientState, name AnyObjectID, interface_ string, new_id AnyObjectID, version_number uint32)\n")
+	b.WriteString(on_bind_declaration)
 
 	switch iface.Name {
 	case "WlKeyboard":

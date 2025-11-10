@@ -148,8 +148,9 @@ func CopyBufferToWlSurfaceTexture(
 
 	src := memMap.Bytes
 	if offset < 0 || offset+total > len(src) {
-		fmt.Println("Pool memory bounds error during copy; can't commit")
+		// fmt.Println("Pool memory bounds error during copy; can't commit")
 		return
+
 	}
 
 	copy(surface.Texture.Data, src[offset:offset+total])

@@ -125,7 +125,7 @@ func (tw *TerminalWindow) OnExit() {
 }
 
 func (tw *TerminalWindow) InputLoop() {
-	read_chan := make(chan []byte, 1024)
+	read_chan := make(chan []byte, 8192)
 	go func() {
 		buf := make([]byte, 4096)
 		for {

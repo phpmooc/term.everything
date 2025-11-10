@@ -8,9 +8,14 @@ type OnBindable interface {
 	OnBind(s ClientState, name AnyObjectID, interface_ string, new_id AnyObjectID, version_number uint32)
 }
 
+type HasBindable interface {
+	GetBindable() OnBindable
+}
+
 type WaylandObject[T OnBindable] interface {
-	Delegate() T
+	GetDelegate() T
 	OnRequest(s FileDescriptorClaimClientState, message Message)
+	GetBindable() OnBindable
 }
 
 type OnRequestable interface {

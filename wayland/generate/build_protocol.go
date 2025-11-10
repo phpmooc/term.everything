@@ -37,7 +37,7 @@ func Get{{.Name}}Object(cs {{.Pkg}}ClientState, id {{.Pkg}}ObjectID[{{.Pkg}}{{.N
         return nil
     }
     o := v.({{.Pkg}}WaylandObject[{{.Pkg}}{{.Name}}_delegate])
-    d := o.Delegate()
+    d := o.GetDelegate()
     return d.(*{{.Name}})
 }
 `))
@@ -50,6 +50,18 @@ func Get{{.Name}}Object(cs {{.Pkg}}ClientState, id {{.Pkg}}ObjectID[{{.Pkg}}{{.N
 		fmt.Fprintf(&out, "type %s struct {\n", intf.Name)
 		fmt.Fprintf(&out, "    Delegate %s_delegate\n", intf.Name)
 		out.WriteString("}\n\n")
+
+		get_delegate_template := `func (p *%s) GetDelegate() %s_delegate {
+			return p.Delegate
+		}
+		`
+		fmt.Fprintf(&out, get_delegate_template, intf.Name, intf.Name)
+
+		get_bindable_template := `func (p *%s) GetBindable() OnBindable {
+			return p.Delegate
+		}
+		`
+		fmt.Fprintf(&out, get_bindable_template, intf.Name)
 
 		// get_object_template := `
 		// func Get%sObject(cs ClientState, id ObjectID[%s]) WaylandObject[%s_delegate] {

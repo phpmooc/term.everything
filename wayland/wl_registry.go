@@ -49,7 +49,9 @@ func (w *WlRegistryDelegateImpl) WlRegistry_bind(s protocols.ClientState, object
 
 	if object != nil {
 
-		delegate := object.(protocols.WaylandObject[protocols.OnBindable]).Delegate()
+		// delegate := object.(protocols.WaylandObject[protocols.OnBindable]).GetDelegate()
+
+		delegate := object.(protocols.HasBindable).GetBindable()
 		delegate.OnBind(
 			s,
 			protocols.AnyObjectID(name),

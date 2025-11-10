@@ -74,6 +74,6 @@ func GetWlPoolObject_FromBuffer(cs protocols.ClientState, id protocols.ObjectID[
 		return nil
 	}
 	o := v.(protocols.WaylandObject[protocols.WlBuffer_delegate])
-	d := o.Delegate()
+	d := o.GetDelegate()
 	return d.(*WlShmPool)
 }

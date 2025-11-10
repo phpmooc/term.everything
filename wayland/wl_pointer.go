@@ -104,8 +104,12 @@ func (p *WlPointer) OnBind(
 
 func MakeWlPointer() *protocols.WlPointer {
 	return &protocols.WlPointer{
-		Delegate: &WlPointer{},
+		Delegate: &WlPointer{
+			PointerSurfaceID: make(map[protocols.ClientState]*protocols.ObjectID[protocols.WlSurface]),
+		},
 	}
 }
 
-var Pointer = WlPointer{}
+var Pointer = WlPointer{
+	PointerSurfaceID: make(map[protocols.ClientState]*protocols.ObjectID[protocols.WlSurface]),
+}

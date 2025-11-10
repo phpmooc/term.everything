@@ -227,7 +227,7 @@ func (c *Client) MainLoop() {
 					log.Printf("Send error: %v", err)
 					return
 				}
-				print("Send done\n")
+				// print("Send done\n")
 			case <-timeout:
 				goto drained
 				// default:
