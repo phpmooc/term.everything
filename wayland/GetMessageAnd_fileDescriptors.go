@@ -10,7 +10,7 @@ import (
 
 func GetMessageAndFileDescriptors(conn *net.UnixConn, buf []byte) (n int, fds []int, err error) {
 	const (
-		timeout      = 10 * time.Millisecond
+		timeout      = 1 * time.Millisecond
 		maxFDsInCmsg = 10  // matches C++: CMSG_SPACE(sizeof(int) * 10)
 		hardFDLimit  = 255 // matches C++ guard in the copy loop
 		intSizeBytes = 4   // sizeof(int) on Linux

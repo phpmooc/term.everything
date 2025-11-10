@@ -207,9 +207,8 @@ func MakeClient(conn *net.UnixConn) *Client {
 		drawableSurfaces: make(map[protocols.ObjectID[protocols.WlSurface]]bool),
 		topLevelSurfaces: make(map[protocols.ObjectID[protocols.XdgToplevel]]bool),
 
-		GlobalBinds:        make(map[protocols.GlobalID]any),
-		LastGetMessageTime: time.Now().Add(-WAIT_TIME - time.Millisecond),
-		FrameDrawRequests:  make(chan protocols.ObjectID[protocols.WlCallback], 1024),
+		GlobalBinds:       make(map[protocols.GlobalID]any),
+		FrameDrawRequests: make(chan protocols.ObjectID[protocols.WlCallback], 1024),
 	}
 }
 
@@ -223,18 +222,8 @@ func (c *Client) MainLoop() {
 					log.Printf("Send error: %v", err)
 					return
 				}
-				// print("Send done\n")
 			default:
 				goto drained
-				// case <-timeout:
-				// 	goto drained
-				// 	// default:
-				// 	// 	elapsed := time.Since(c.LastGetMessageTime)
-				// 	// 	if elapsed < WAIT_TIME {
-				// 	// 		time.Sleep(WAIT_TIME - elapsed)
-				// 	// 	}
-				// 	// 	c.LastGetMessageTime = time.Now()
-				// 	// 	goto drained
 			}
 		}
 	drained:
