@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/mmulet/term.everything/wayland/protocols"
@@ -21,7 +22,7 @@ type Client struct {
 
 	DisplayID protocols.ObjectID[protocols.WlDisplay]
 
-	MessageBuffer []byte
+	messageBuffer []byte
 
 	OutgoingChannel chan protocols.OutgoingEvent
 
@@ -38,6 +39,8 @@ type Client struct {
 	GlobalBinds map[protocols.GlobalID]any
 
 	LastGetMessageTime time.Time
+
+	Access sync.Mutex
 }
 
 func (c *Client) AddFrameDrawRequest(cb protocols.ObjectID[protocols.WlCallback]) {
@@ -196,7 +199,7 @@ func MakeClient(conn *net.UnixConn) *Client {
 		CompositorVersion: 1,
 		DisplayID:         protocols.ObjectID[protocols.WlDisplay](1),
 
-		MessageBuffer: make([]byte, 64*1024),
+		messageBuffer: make([]byte, 64*1024),
 
 		OutgoingChannel: make(chan protocols.OutgoingEvent, 8192),
 
@@ -218,6 +221,7 @@ func (c *Client) MainLoop() {
 		for {
 			select {
 			case ev := <-c.OutgoingChannel:
+
 				if err := c.SendPendingMessage(ev); err != nil {
 					log.Printf("Send error: %v", err)
 					return
@@ -229,7 +233,7 @@ func (c *Client) MainLoop() {
 	drained:
 
 		// Receive once with short deadline; parse and dispatch.
-		n, fds, err := GetMessageAndFileDescriptors(c.UnixConnection, c.MessageBuffer)
+		n, fds, err := GetMessageAndFileDescriptors(c.UnixConnection, c.messageBuffer)
 		if err != nil {
 			// treat unexpected read errors as fatal
 			log.Printf("Recv error: %v", err)
@@ -254,7 +258,8 @@ func (c *Client) Send(ev protocols.OutgoingEvent) {
  * returns falsy mostly if the client has disconnected
  */
 func (c *Client) SendPendingMessage(ev protocols.OutgoingEvent) error {
-
+	c.Access.Lock()
+	defer c.Access.Unlock()
 	if protocols.DebugRequests {
 		log.Printf("client -> eid=%d opcode=%d len=%d fd=%v",
 			uint32(ev.ObjectID), ev.Opcode, len(ev.Data), ev.FileDescriptor)
@@ -299,6 +304,8 @@ func (c *Client) SendPendingMessage(ev protocols.OutgoingEvent) error {
 }
 
 func (c *Client) ParseMessages(n int, fds []int) error {
+	c.Access.Lock()
+	defer c.Access.Unlock()
 	// if len(fds) > 0 && WaylandDebugTimeOnly() {
 	// 	log.Printf("client: received %d file descriptors", len(fds))
 	// }
@@ -317,7 +324,7 @@ func (c *Client) ParseMessages(n int, fds []int) error {
 		return nil
 	}
 
-	msgs := c.Decoder.Consume(c.MessageBuffer[:n])
+	msgs := c.Decoder.Consume(c.messageBuffer[:n])
 	for i := range msgs {
 		m := msgs[i]
 		obj := c.GetObject(m.ObjectID)

@@ -157,6 +157,10 @@ func (tw *TerminalDrawLoop) MainLoop() {
 		}
 
 		for _, s := range tw.Clients {
+			s.Access.Lock()
+		}
+
+		for _, s := range tw.Clients {
 			pointer_surface_id := wayland.Pointer.PointerSurfaceID[s]
 			if pointer_surface_id == nil {
 				continue
@@ -191,6 +195,10 @@ func (tw *TerminalDrawLoop) MainLoop() {
 		clear(keys_pressed_this_frame)
 
 		timeout := time.After(time.Duration(tw.DesiredFrameTimeSeconds * float64(time.Second)))
+
+		for _, s := range tw.Clients {
+			s.Access.Unlock()
+		}
 
 		for {
 			select {

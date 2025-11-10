@@ -145,149 +145,126 @@ func (tw *TerminalWindow) InputLoop() {
 			}
 		}
 	GotData:
-
-		// Very literal: TS line -> const codes = convert_keycode_to_xbd_code(chunk);
 		codes := ConvertKeycodeToXbdCode(chunk)
+		tw.ProcessCodes(codes)
+	}
+}
 
-		now := uint32(time.Now().UnixMilli())
+func (tw *TerminalWindow) ProcessCodes(codes []XkbdCode) {
+	for _, s := range tw.Clients {
+		s.Access.Lock()
+		defer s.Access.Unlock()
+	}
+	now := uint32(time.Now().UnixMilli())
 
-		for _, code := range codes {
-			tw.FrameEvents <- code
-			new_key_serial := tw.KeySerial
-			tw.KeySerial += 2
+	for _, code := range codes {
+		tw.FrameEvents <- code
+		new_key_serial := tw.KeySerial
+		tw.KeySerial += 2
 
+		for _, s := range tw.Clients {
+			if keyboard_map := protocols.GetGlobalWlKeyboardBinds(s); keyboard_map != nil {
+				modifiers := code.GetModifiers()
+				for keyboardID := range keyboard_map {
+					protocols.WlKeyboard_modifiers(
+						s,
+						keyboardID,
+						new_key_serial,
+						uint32(modifiers),
+						0, 0, 0,
+					)
+				}
+			}
+		}
+		switch c := code.(type) {
+		case *KeyCode:
 			for _, s := range tw.Clients {
 				if keyboard_map := protocols.GetGlobalWlKeyboardBinds(s); keyboard_map != nil {
-					modifiers := code.GetModifiers()
 					for keyboardID := range keyboard_map {
-						protocols.WlKeyboard_modifiers(
+						protocols.WlKeyboard_key(
 							s,
 							keyboardID,
 							new_key_serial,
-							uint32(modifiers),
-							0, 0, 0,
+							now,
+							uint32(c.KeyCode),
+							protocols.WlKeyboardKeyState_enum_pressed,
+						)
+						/**
+						 * There is no key up code in
+						 * ANSI escape codes, so
+						 * just say it is released
+						 * instantly
+						 */
+						protocols.WlKeyboard_key(
+							s,
+							keyboardID,
+							new_key_serial+1,
+							now,
+							uint32(c.KeyCode),
+							protocols.WlKeyboardKeyState_enum_released,
 						)
 					}
 				}
 			}
-			switch c := code.(type) {
-			case *KeyCode:
-				for _, s := range tw.Clients {
-					if keyboard_map := protocols.GetGlobalWlKeyboardBinds(s); keyboard_map != nil {
-						for keyboardID := range keyboard_map {
-							protocols.WlKeyboard_key(
-								s,
-								keyboardID,
-								new_key_serial,
-								now,
-								uint32(c.KeyCode),
-								protocols.WlKeyboardKeyState_enum_pressed,
-							)
-							/**
-							 * There is no key up code in
-							 * ANSI escape codes, so
-							 * just say it is released
-							 * instantly
-							 */
-							protocols.WlKeyboard_key(
-								s,
-								keyboardID,
-								new_key_serial+1,
-								now,
-								uint32(c.KeyCode),
-								protocols.WlKeyboardKeyState_enum_released,
-							)
-						}
+
+		case *PointerMove:
+			cols, rows := tw.CurrentTerminalSize()
+			x := float32(c.Col) *
+				(float32(tw.VirtualMonitorSize.Width) /
+					float32(cols))
+			y := float32(c.Row) *
+				(float32(tw.VirtualMonitorSize.Height) /
+					float32(rows))
+
+			wayland.Pointer.WindowX = x
+			wayland.Pointer.WindowY = y
+
+			for _, s := range tw.Clients {
+				if pointers_map := protocols.GetGlobalWlPointerBinds(s); pointers_map != nil {
+					for pointerID, version := range pointers_map {
+						protocols.WlPointer_motion(
+							s,
+							pointerID,
+							uint32(time.Now().UnixMilli()),
+							x,
+							y,
+						)
+						protocols.WlPointer_frame(
+							s,
+							uint32(version),
+							pointerID,
+						)
 					}
 				}
+			}
 
-			case *PointerMove:
-				cols, rows := tw.CurrentTerminalSize()
-				x := float32(c.Col) *
-					(float32(tw.VirtualMonitorSize.Width) /
-						float32(cols))
-				y := float32(c.Row) *
-					(float32(tw.VirtualMonitorSize.Height) /
-						float32(rows))
+		case *PointerButtonPress:
 
-				wayland.Pointer.WindowX = x
-				wayland.Pointer.WindowY = y
+			release := tw.GetButtonToReleaseAndUpdatePressedMouseButton(c.Button)
+			for _, s := range tw.Clients {
 
-				for _, s := range tw.Clients {
-					if pointers_map := protocols.GetGlobalWlPointerBinds(s); pointers_map != nil {
-						for pointerID, version := range pointers_map {
-							protocols.WlPointer_motion(
-								s,
-								pointerID,
-								uint32(time.Now().UnixMilli()),
-								x,
-								y,
-							)
-							protocols.WlPointer_frame(
-								s,
-								uint32(version),
-								pointerID,
-							)
-						}
-					}
-				}
-
-			case *PointerButtonPress:
-
-				release := tw.GetButtonToReleaseAndUpdatePressedMouseButton(c.Button)
-				for _, s := range tw.Clients {
-
-					if pointer_map := protocols.GetGlobalWlPointerBinds(s); pointer_map != nil {
-						for pointerID, version := range pointer_map {
+				if pointer_map := protocols.GetGlobalWlPointerBinds(s); pointer_map != nil {
+					for pointerID, version := range pointer_map {
+						protocols.WlPointer_button(
+							s,
+							pointerID,
+							uint32(time.Now().UnixMilli()),
+							uint32(time.Now().UnixMilli()),
+							uint32(c.Button),
+							protocols.WlPointerButtonState_enum_pressed,
+						)
+						protocols.WlPointer_frame(
+							s,
+							uint32(version),
+							pointerID,
+						)
+						if release != nil {
 							protocols.WlPointer_button(
 								s,
 								pointerID,
 								uint32(time.Now().UnixMilli()),
 								uint32(time.Now().UnixMilli()),
-								uint32(c.Button),
-								protocols.WlPointerButtonState_enum_pressed,
-							)
-							protocols.WlPointer_frame(
-								s,
-								uint32(version),
-								pointerID,
-							)
-							if release != nil {
-								protocols.WlPointer_button(
-									s,
-									pointerID,
-									uint32(time.Now().UnixMilli()),
-									uint32(time.Now().UnixMilli()),
-									uint32(*release),
-									protocols.WlPointerButtonState_enum_released,
-								)
-								protocols.WlPointer_frame(
-									s,
-									uint32(version),
-									pointerID,
-								)
-							}
-						}
-					}
-				}
-
-			case *PointerButtonRelease:
-				if tw.PressedMouseButton == nil {
-					break
-				}
-				buttonToRelease := *tw.PressedMouseButton
-				tw.PressedMouseButton = nil
-
-				for _, s := range tw.Clients {
-
-					if pointer_map := protocols.GetGlobalWlPointerBinds(s); pointer_map != nil {
-						for pointerID, version := range pointer_map {
-							protocols.WlPointer_button(
-								s,
-								pointerID,
-								uint32(time.Now().UnixMilli()),
-								uint32(time.Now().UnixMilli()),
-								uint32(buttonToRelease),
+								uint32(*release),
 								protocols.WlPointerButtonState_enum_released,
 							)
 							protocols.WlPointer_frame(
@@ -298,36 +275,64 @@ func (tw *TerminalWindow) InputLoop() {
 						}
 					}
 				}
+			}
 
-			case *PointerWheel:
-				_, rows := tw.CurrentTerminalSize()
+		case *PointerButtonRelease:
+			if tw.PressedMouseButton == nil {
+				break
+			}
+			buttonToRelease := *tw.PressedMouseButton
+			tw.PressedMouseButton = nil
 
-				var scale float32 = 0.5
-				if (c.Modifiers & ModAlt) != 0 {
-					scale = 1
-				}
-				amount := scale * float32(tw.ScrollDirection(c.Up)) * float32(tw.VirtualMonitorSize.Height) / float32(rows)
-				for _, s := range tw.Clients {
-					if pointer_id := protocols.GetGlobalWlPointerBinds(s); pointer_id != nil {
-						for pointerID, version := range pointer_id {
-							protocols.WlPointer_axis(
-								s,
-								pointerID,
-								uint32(time.Now().UnixMilli()),
-								protocols.WlPointerAxis_enum_vertical_scroll,
-								amount,
-							)
-							protocols.WlPointer_frame(
-								s,
-								uint32(version),
-								pointerID,
-							)
-						}
+			for _, s := range tw.Clients {
+
+				if pointer_map := protocols.GetGlobalWlPointerBinds(s); pointer_map != nil {
+					for pointerID, version := range pointer_map {
+						protocols.WlPointer_button(
+							s,
+							pointerID,
+							uint32(time.Now().UnixMilli()),
+							uint32(time.Now().UnixMilli()),
+							uint32(buttonToRelease),
+							protocols.WlPointerButtonState_enum_released,
+						)
+						protocols.WlPointer_frame(
+							s,
+							uint32(version),
+							pointerID,
+						)
 					}
 				}
-			default:
-				// literal never_default(code) equivalent: do nothing
 			}
+
+		case *PointerWheel:
+			_, rows := tw.CurrentTerminalSize()
+
+			var scale float32 = 0.5
+			if (c.Modifiers & ModAlt) != 0 {
+				scale = 1
+			}
+			amount := scale * float32(tw.ScrollDirection(c.Up)) * float32(tw.VirtualMonitorSize.Height) / float32(rows)
+			for _, s := range tw.Clients {
+				if pointer_id := protocols.GetGlobalWlPointerBinds(s); pointer_id != nil {
+					for pointerID, version := range pointer_id {
+						protocols.WlPointer_axis(
+							s,
+							pointerID,
+							uint32(time.Now().UnixMilli()),
+							protocols.WlPointerAxis_enum_vertical_scroll,
+							amount,
+						)
+						protocols.WlPointer_frame(
+							s,
+							uint32(version),
+							pointerID,
+						)
+					}
+				}
+			}
+		default:
+			// literal never_default(code) equivalent: do nothing
 		}
 	}
 }
