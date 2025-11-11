@@ -1,3 +1,7 @@
+
+# 0.7.5
+- Converted code to entriely go (with a tiny bit of c). THis simplifies the build process and reduces dependencies. This lets us easily port to new platforms like arm64.
+
 # 0.5.4
 - Added environment variables to pass through chafa options.
 - Added environment variable `TERM_EVERYTHING_PIXEL_TYPE` to workaround certain cases where there is a bgr/rgb swap.

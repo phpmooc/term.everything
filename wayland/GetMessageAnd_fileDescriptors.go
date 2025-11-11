@@ -8,18 +8,19 @@ import (
 	"time"
 )
 
-func GetMessageAndFileDescriptors(conn *net.UnixConn, buf []byte) (n int, fds []int, err error) {
-	const (
-		timeout      = 1 * time.Millisecond
-		maxFDsInCmsg = 10  // matches C++: CMSG_SPACE(sizeof(int) * 10)
-		hardFDLimit  = 255 // matches C++ guard in the copy loop
-		intSizeBytes = 4   // sizeof(int) on Linux
-	)
+const (
+	GetMessage_timeout      = 1 * time.Millisecond
+	GetMessage_maxFDsInCmsg = 10  // matches C++: CMSG_SPACE(sizeof(int) * 10)
+	GetMessage_hardFDLimit  = 255 // matches C++ guard in the copy loop
+	GetMessage_intSizeBytes = 4   // sizeof(int) on Linux
+)
 
-	oob := make([]byte, syscall.CmsgSpace(maxFDsInCmsg*intSizeBytes))
+var oob = make([]byte, syscall.CmsgSpace(GetMessage_intSizeBytes*GetMessage_maxFDsInCmsg))
+
+func GetMessageAndFileDescriptors(conn *net.UnixConn, buf []byte) (n int, fds []int, err error) {
 
 	// 10ms "select"-style timeout
-	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(GetMessage_timeout)); err != nil {
 		return 0, nil, err
 	}
 	defer conn.SetReadDeadline(time.Time{})
@@ -48,8 +49,8 @@ func GetMessageAndFileDescriptors(conn *net.UnixConn, buf []byte) (n int, fds []
 			for _, cmsg := range cmsgs {
 				if rights, rerr := syscall.ParseUnixRights(&cmsg); rerr == nil && len(rights) > 0 {
 					fds = append(fds, rights...)
-					if len(fds) >= hardFDLimit {
-						fds = fds[:hardFDLimit]
+					if len(fds) >= GetMessage_hardFDLimit {
+						fds = fds[:GetMessage_hardFDLimit]
 						break
 					}
 				}
