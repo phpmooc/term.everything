@@ -40,7 +40,7 @@ So, this means we can do anything we want, so let's output to the terminal!
 
 I take the output given to us by the client and convert the images to terminal
 output, the utf8 characters with ansi escape codes via the [chafa library](https://github.com/hpjansson/chafa/). For input, I take the keyboard and mouse (yes terminals support mice)
-from the stdin. And that's it! Of course, there are about 10K lines of code needed to actually do this in practice, but if you're interested in that I invite you to [check out the source code](../src/).
+from the stdin. And that's it! Of course, there are about 10K lines of code needed to actually do this in practice, but if you're interested in that I invite you to [check out the source code](../termeverything/).
 
 ## What else can you do with wayland
 I have many other crazy ideas of what else to do custom wayland display server, so stay tuned.
