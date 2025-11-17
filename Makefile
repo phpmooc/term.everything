@@ -2,7 +2,7 @@
 
 .DELETE_ON_ERROR:
 
-bin_name :=  dist/$(if $(PLATFORM),$(PLATFORM)/,)$(if $(STATIC_BUILD),static,)/term.everything❗mmulet.com-dont_forget_to_chmod_+x_this_file
+bin_name :=  dist/$(if $(PLATFORM),$(PLATFORM)/,)$(if $(STATIC_BUILD),static,)/$(ARCH_PREFIX)term.everything❗mmulet.com-dont_forget_to_chmod_+x_this_file
 
 protocols_files := $(shell find ./wayland/generate)
 

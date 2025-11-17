@@ -1,5 +1,5 @@
 #!/bin/bash
 
 
-PLATFORM=linux/aarch64 ./distribute.sh
-PLATFORM=linux/amd64 ./distribute.sh
+PLATFORM=linux/aarch64 ARCH_PREFIX=ARM- ./distribute.sh
+PLATFORM=linux/amd64 ARCH_PREFIX= ./distribute.sh
