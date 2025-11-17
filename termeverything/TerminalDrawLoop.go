@@ -1,6 +1,7 @@
 package termeverything
 
 import (
+	"os"
 	"slices"
 	"strconv"
 	"time"
@@ -9,6 +10,18 @@ import (
 	"github.com/mmulet/term.everything/wayland"
 	"github.com/mmulet/term.everything/wayland/protocols"
 )
+
+type FrameInputState struct {
+	KeysPressedThisFrame map[Linux_Event_Codes]bool
+	MouseMoveThisFrame   bool
+}
+
+func MakeFrameInputState() FrameInputState {
+	return FrameInputState{
+		KeysPressedThisFrame: make(map[Linux_Event_Codes]bool),
+		MouseMoveThisFrame:   false,
+	}
+}
 
 type TerminalDrawLoop struct {
 	VirtualMonitorSize wayland.Size
@@ -42,7 +55,10 @@ type TerminalDrawLoop struct {
 
 	StatusLine *Status_Line
 
-	GetClients chan *wayland.Client
+	GetClients      chan *wayland.Client
+	FirstDrawDone   bool
+	LastDrawSize    framebuffertoansi.WinSize
+	FrameInputState FrameInputState
 }
 
 func MakeTerminalDrawLoop(desktop_size wayland.Size,
@@ -74,6 +90,7 @@ func MakeTerminalDrawLoop(desktop_size wayland.Size,
 		StatusLine:              MakeStatusLine(),
 		FrameEvents:             frameEvents,
 		GetClients:              make(chan *wayland.Client, 32),
+		FrameInputState:         MakeFrameInputState(),
 	}
 	if args != nil && args.MaxFrameRate != "" {
 		if fps, err := strconv.ParseFloat(args.MaxFrameRate, 64); err == nil && fps > 0 {
@@ -98,17 +115,7 @@ func (tw *TerminalDrawLoop) GetAppTitle() *string {
 	return nil
 }
 
-func (tw *TerminalDrawLoop) DrawToTerminal(start_of_frame float64, status_line string) {
-	if tw.MinTerminalTimeSeconds != nil {
-		last := 0.0
-		if tw.TimeOfLastTerminalDraw != nil {
-			last = *tw.TimeOfLastTerminalDraw
-		}
-		if start_of_frame-last < *tw.MinTerminalTimeSeconds {
-			return
-		}
-		tw.TimeOfLastTerminalDraw = &start_of_frame
-	}
+func (tw *TerminalDrawLoop) DrawToTerminal(status_line string) {
 
 	// if protocols.DebugRequests {
 	// 	fmt.Println("Debugging!!!")
@@ -116,28 +123,25 @@ func (tw *TerminalDrawLoop) DrawToTerminal(start_of_frame float64, status_line s
 	// 	fmt.Println("Not debugging.")
 	// }
 
-	if !protocols.DebugRequests {
-		var statusLine *string
-		if !tw.HideStatusBar {
-			statusLine = &status_line
-		}
-
-		widthCells, heightCells := tw.DrawState.DrawDesktop(
-			tw.Desktop.Buffer,
-			tw.VirtualMonitorSize.Width,
-			tw.VirtualMonitorSize.Height,
-			statusLine,
-		)
-		tw.SharedRenderedScreenSize.WidthCells = &widthCells
-		tw.SharedRenderedScreenSize.HeightCells = &heightCells
+	var statusLine *string
+	if !tw.HideStatusBar {
+		statusLine = &status_line
 	}
+
+	widthCells, heightCells := tw.DrawState.DrawDesktop(
+		tw.Desktop.Buffer,
+		tw.VirtualMonitorSize.Width,
+		tw.VirtualMonitorSize.Height,
+		statusLine,
+	)
+	tw.SharedRenderedScreenSize.WidthCells = &widthCells
+	tw.SharedRenderedScreenSize.HeightCells = &heightCells
 
 }
 
 func (tw *TerminalDrawLoop) MainLoop() {
-	keys_pressed_this_frame := map[Linux_Event_Codes]bool{}
 	for {
-		tw.DrawClients(keys_pressed_this_frame)
+		tw.DrawClients()
 		timeout := time.After(time.Duration(tw.DesiredFrameTimeSeconds * float64(time.Second)))
 
 		for {
@@ -145,9 +149,10 @@ func (tw *TerminalDrawLoop) MainLoop() {
 			case code := <-tw.FrameEvents:
 				switch c := code.(type) {
 				case *KeyCode:
-					keys_pressed_this_frame[c.KeyCode] = true
+					tw.FrameInputState.KeysPressedThisFrame[c.KeyCode] = true
 				case *PointerMove:
 					tw.StatusLine.UpdateMousePosition(c)
+					tw.FrameInputState.MouseMoveThisFrame = true
 				case *PointerButtonPress:
 					tw.StatusLine.HandleTerminalMousePress(true)
 				case *PointerButtonRelease:
@@ -170,8 +175,8 @@ func (tw *TerminalDrawLoop) MainLoop() {
 	}
 }
 
-func (tw *TerminalDrawLoop) DrawClients(keys_pressed_this_frame map[Linux_Event_Codes]bool) {
-
+func (tw *TerminalDrawLoop) DrawClients() {
+	defer tw.ResetFrameState()
 	start_of_frame := float64(time.Now().UnixMilli()) / 1000.0
 	var delta_time float64
 	if tw.TimeOfStartOfLastFrame != nil {
@@ -179,12 +184,13 @@ func (tw *TerminalDrawLoop) DrawClients(keys_pressed_this_frame map[Linux_Event_
 	} else {
 		delta_time = tw.DesiredFrameTimeSeconds
 	}
-
+	num_draw_requests := 0
 	for _, s := range tw.Clients {
 		for {
 			select {
 			case callback_id := <-s.FrameDrawRequests:
 				protocols.WlCallback_done(s, callback_id, uint32(time.Now().UnixMilli()))
+				num_draw_requests++
 			default:
 				goto DoneCallbacks
 			}
@@ -224,9 +230,11 @@ func (tw *TerminalDrawLoop) DrawClients(keys_pressed_this_frame map[Linux_Event_
 
 	tw.Desktop.DrawClients(tw.Clients)
 
-	status_line := tw.StatusLine.Draw(delta_time, tw.GetAppTitle(), keys_pressed_this_frame)
+	status_line := tw.StatusLine.Draw(delta_time, tw.GetAppTitle(), tw.FrameInputState.KeysPressedThisFrame)
 
-	tw.DrawToTerminal(start_of_frame, status_line)
+	if tw.ShouldDrawFrame(start_of_frame, num_draw_requests) {
+		tw.DrawToTerminal(status_line)
+	}
 
 	// const draw_time = Date.now();
 
@@ -239,5 +247,43 @@ func (tw *TerminalDrawLoop) DrawClients(keys_pressed_this_frame map[Linux_Event_
 
 	tw.StatusLine.PostFrame(delta_time)
 
-	clear(keys_pressed_this_frame)
+}
+
+func (tw *TerminalDrawLoop) ResetFrameState() {
+	tw.FrameInputState.MouseMoveThisFrame = false
+	clear(tw.FrameInputState.KeysPressedThisFrame)
+}
+
+func (tw *TerminalDrawLoop) ShouldDrawFrame(start_of_frame float64, num_draw_requests int) (should_draw bool) {
+	defer func() {
+		if should_draw {
+			tw.FirstDrawDone = true
+		}
+	}()
+	if tw.MinTerminalTimeSeconds != nil {
+		last := 0.0
+		if tw.TimeOfLastTerminalDraw != nil {
+			last = *tw.TimeOfLastTerminalDraw
+		}
+		if start_of_frame-last < *tw.MinTerminalTimeSeconds {
+			return false
+		}
+		tw.TimeOfLastTerminalDraw = &start_of_frame
+	}
+	if protocols.DebugRequests {
+		return false
+	}
+
+	if winsize, err := framebuffertoansi.GetWinsize(os.Stdout.Fd()); err == nil {
+		defer func() {
+			tw.LastDrawSize = winsize
+		}()
+		if winsize != tw.LastDrawSize {
+			return true
+		}
+	}
+	if num_draw_requests == 0 {
+		return tw.FrameInputState.MouseMoveThisFrame || !tw.FirstDrawDone
+	}
+	return true
 }
