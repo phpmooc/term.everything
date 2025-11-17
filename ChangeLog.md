@@ -1,4 +1,7 @@
 
+# 0.7.6
+- Now it only redraws the screen when there are changes (like frame draw requests from wayland, mouse movement, etc), reducing CPU usage, and network bandwidth for remote sessions.
+- Moved profiling code behind a build tag to reduce binary size for normal users.
 # 0.7.5
 - Converted code to entriely go (with a tiny bit of c). THis simplifies the build process and reduces dependencies. This lets us easily port to new platforms like arm64.
 

@@ -14,7 +14,7 @@ var helpFile string
 //go:embed resources/LICENSES.txt
 var licensesFile string
 
-const version = "0.7.5"
+const version = "0.7.6"
 
 type CommandLineArgs struct {
 	WaylandDisplayNameArg string
