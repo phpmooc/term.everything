@@ -1,4 +1,5 @@
-
+# 0.7.7
+- Fixed a bug where the terminal would not output SIXELS even when the override was set.
 # 0.7.6
 - Now it only redraws the screen when there are changes (like frame draw requests from wayland, mouse movement, etc), reducing CPU usage, and network bandwidth for remote sessions.
 - Moved profiling code behind a build tag to reduce binary size for normal users.
