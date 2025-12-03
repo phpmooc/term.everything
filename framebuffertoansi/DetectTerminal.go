@@ -34,10 +34,21 @@ func getPixelMode(termInfo *C.ChafaTermInfo) C.ChafaPixelMode {
 	case "SYMBOLS":
 		return C.CHAFA_PIXEL_MODE_SYMBOLS
 	case "SIXELS":
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_BEGIN_SIXELS, C.CString("\033P%1;%2;%3q"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_END_SIXELS, C.CString("\033\\"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_ENABLE_SIXEL_SCROLLING, C.CString("\033[?80l"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_DISABLE_SIXEL_SCROLLING, C.CString("\033[?80h"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_SET_SIXEL_ADVANCE_DOWN, C.CString("\033[?8452l"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_SET_SIXEL_ADVANCE_RIGHT, C.CString("\033[?8452h"), nil)
 		return C.CHAFA_PIXEL_MODE_SIXELS
 	case "KITTY":
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_BEGIN_KITTY_IMMEDIATE_IMAGE_V1, C.CString("\033_Ga=T,f=%1,s=%2,v=%3,c=%4,r=%5,m=1\033\\"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_END_KITTY_IMAGE, C.CString("\033_Gm=0\033\\"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_BEGIN_KITTY_IMAGE_CHUNK, C.CString("\033_Gm=1;"), nil)
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_END_KITTY_IMAGE_CHUNK, C.CString("\033\\"), nil)
 		return C.CHAFA_PIXEL_MODE_KITTY
 	case "ITERM2":
+		C.chafa_term_info_set_seq(termInfo, C.CHAFA_TERM_SEQ_BEGIN_ITERM2_IMAGE, C.CString("\033]1337;File=inline=1;width=%1;height=%2;preserveAspectRatio=0:"), nil)
 		return C.CHAFA_PIXEL_MODE_ITERM2
 	default:
 		return getDefaultPixelMode(termInfo)
